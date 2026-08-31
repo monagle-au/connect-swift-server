@@ -24,9 +24,11 @@ extension WireProtocolHandler {
     ///
     /// `RPCError`s pass through unchanged so the wire response keeps
     /// the handler's chosen code/message; everything else is wrapped as
-    /// `.internalError` with the description as the message. Always
-    /// reports the original error (not the wrapped one) to the logger
-    /// so consumers can match on their own error types.
+    /// `.internalError` with a **generic** message — the description of
+    /// an arbitrary error (a database failure, say) can carry internal
+    /// detail that must not reach the wire. Always reports the original
+    /// error (not the wrapped one) to the logger so consumers can match
+    /// on their own error types and log the real detail.
     @inline(__always)
     func reportRPCError(
         _ error: any Error,
@@ -34,7 +36,7 @@ extension WireProtocolHandler {
     ) -> RPCError {
         errorLogger?(error, descriptor)
         return (error as? RPCError)
-            ?? RPCError(code: .internalError, message: String(describing: error))
+            ?? RPCError(code: .internalError, message: "internal error")
     }
 
     /// Static variant for use from `@Sendable` closures (streaming body
@@ -47,6 +49,6 @@ extension WireProtocolHandler {
     ) -> RPCError {
         logger?(error, descriptor)
         return (error as? RPCError)
-            ?? RPCError(code: .internalError, message: String(describing: error))
+            ?? RPCError(code: .internalError, message: "internal error")
     }
 }
