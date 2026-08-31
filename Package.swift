@@ -50,11 +50,20 @@ let package = Package(
                 .swiftLanguageMode(.v6),
             ]
         ),
-        .executableTarget(
-            name: "protoc-gen-connect-swift-server",
+        .target(
+            name: "ConnectServerGenerator",
             dependencies: [
                 .product(name: "SwiftProtobuf", package: "swift-protobuf"),
                 .product(name: "SwiftProtobufPluginLibrary", package: "swift-protobuf"),
+            ],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+        .executableTarget(
+            name: "protoc-gen-connect-swift-server",
+            dependencies: [
+                "ConnectServerGenerator"
             ],
             path: "Sources/protoc-gen-connect-swift-server",
             swiftSettings: [
@@ -69,6 +78,16 @@ let package = Package(
                 .product(name: "SwiftProtobuf", package: "swift-protobuf"),
             ],
             path: "Examples/SmokeTest",
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+        .testTarget(
+            name: "ConnectServerGeneratorTests",
+            dependencies: [
+                "ConnectServerGenerator",
+                .product(name: "SwiftProtobufPluginLibrary", package: "swift-protobuf"),
+            ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
             ]
