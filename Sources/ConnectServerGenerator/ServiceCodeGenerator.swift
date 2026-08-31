@@ -129,13 +129,19 @@ public enum ServiceCodeGenerator {
 
     // MARK: - Naming helpers
 
-    /// Service "helloworld.Greeter" → "Helloworld_GreeterConnectService"
+    /// Service "helloworld.Greeter" → "Helloworld_GreeterConnectService",
+    /// or "<swift_prefix>GreeterConnectService" when the file sets
+    /// `option swift_prefix`, matching how the message types are named.
     private static func swiftServiceTypeName(_ service: ServiceDescriptor) -> String {
         // We construct: <typePrefix><ServiceName>ConnectService
         // typePrefix uses the swift_prefix file option / package convention.
         let parts = service.fullName.split(separator: ".")
-        let pkgParts = parts.dropLast()
         let serviceName = parts.last.map(String.init) ?? service.name
+        let swiftPrefix = service.file.fileOptions.swiftPrefix
+        if !swiftPrefix.isEmpty {
+            return "\(swiftPrefix)\(serviceName)ConnectService"
+        }
+        let pkgParts = parts.dropLast()
         let prefix = pkgParts.map { $0.capitalizedFirst }.joined(separator: "_")
         if prefix.isEmpty {
             return "\(serviceName)ConnectService"

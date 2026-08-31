@@ -113,6 +113,39 @@ struct ServiceCodeGeneratorTests {
         #expect(out.contains("import BudgetForwardAPI"))
     }
 
+    @Test("swift_prefix file option overrides the package-derived type prefix")
+    func swiftPrefixNaming() throws {
+        var models = Google_Protobuf_FileDescriptorProto()
+        models.name = "prefixed.proto"
+        models.package = "budgetforward.api.v1"
+        models.syntax = "proto3"
+        models.options.swiftPrefix = "ProtoV1"
+        var request = Google_Protobuf_DescriptorProto()
+        request.name = "PingRequest"
+        var response = Google_Protobuf_DescriptorProto()
+        response.name = "PingResponse"
+        models.messageType = [request, response]
+        var svc = Google_Protobuf_ServiceDescriptorProto()
+        svc.name = "PingService"
+        var ping = Google_Protobuf_MethodDescriptorProto()
+        ping.name = "Ping"
+        ping.inputType = ".budgetforward.api.v1.PingRequest"
+        ping.outputType = ".budgetforward.api.v1.PingResponse"
+        svc.method = [ping]
+        models.service = [svc]
+
+        let set = DescriptorSet(protos: [models])
+        let file = set.fileDescriptor(named: "prefixed.proto")!
+        let options = try GeneratorOptions()
+        let namer = SwiftProtobufNamer(
+            currentFile: file,
+            protoFileToModuleMappings: options.protoFileToModuleMappings
+        )
+        let out = ServiceCodeGenerator.generate(file: file, namer: namer, options: options)
+        #expect(out.contains("public struct ProtoV1PingServiceConnectService: Sendable"))
+        #expect(out.contains("ServerRequest<ProtoV1PingRequest>"))
+    }
+
     @Test("Internal visibility applies to every generated declaration")
     func internalVisibility() throws {
         let out = generate(options: try GeneratorOptions(visibility: .internal))
