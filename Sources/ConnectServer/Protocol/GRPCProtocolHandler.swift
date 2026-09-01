@@ -5,6 +5,7 @@ import GRPCCore
 import HTTPTypes
 import HummingbirdCore
 import NIOCore
+import Synchronization
 
 // MARK: - GRPCProtocolHandler
 
@@ -149,10 +150,12 @@ struct GRPCProtocolHandler: WireProtocolHandler {
             let stream = AsyncStream<ByteBuffer> { c in continuation = c }
             let cont = continuation!
 
+            let cancellationBox = Mutex<ServerContext.RPCCancellationHandle?>(nil)
             let task = Task<GRPCCore.Metadata, any Error> {
                 // Always finish the stream so the drain loop exits, even on throw.
                 defer { cont.finish() }
                 return try await withServerContextRPCCancellationHandle { cancellationHandle in
+                    cancellationBox.withLock { $0 = cancellationHandle }
                     let context = ServerContext(
                         descriptor: descriptor,
                         remotePeer: "unknown",
@@ -168,6 +171,14 @@ struct GRPCProtocolHandler: WireProtocolHandler {
                         )
                     }
                 }
+            }
+            // If the drain below exits early — the peer vanished and a write
+            // threw — tear the producer down: cancel the RPC handle (wakes
+            // handlers watching context.cancellation) and the producer task.
+            // Idempotent no-op on the happy path.
+            defer {
+                cancellationBox.withLock { $0 }?.cancel()
+                task.cancel()
             }
 
             for await frame in stream {
@@ -261,9 +272,11 @@ struct GRPCProtocolHandler: WireProtocolHandler {
             let stream = AsyncStream<ByteBuffer> { c in continuation = c }
             let cont = continuation!
 
+            let cancellationBox = Mutex<ServerContext.RPCCancellationHandle?>(nil)
             let task = Task<GRPCCore.Metadata, any Error> {
                 defer { cont.finish() }
                 return try await withServerContextRPCCancellationHandle { cancellationHandle in
+                    cancellationBox.withLock { $0 = cancellationHandle }
                     let context = ServerContext(
                         descriptor: descriptor,
                         remotePeer: "unknown",
@@ -279,6 +292,11 @@ struct GRPCProtocolHandler: WireProtocolHandler {
                         )
                     }
                 }
+            }
+            // Tear the producer down if the drain exits early (dead peer).
+            defer {
+                cancellationBox.withLock { $0 }?.cancel()
+                task.cancel()
             }
 
             for await frame in stream {

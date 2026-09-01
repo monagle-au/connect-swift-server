@@ -238,13 +238,29 @@ or `buf generate`.
 version: v2
 plugins:
   - local: protoc-gen-connect-swift-server  # built via swift build --product
+    opt:
+      - Visibility=Public
+      - ProtoPathModuleMappings=module_mappings.asciipb
     out: gen
 ```
 
 The plugin emits one `<Service>ConnectService` struct per service, with a closure
-parameter per RPC method and a `register(with:&router)` helper. See
-[`Sources/protoc-gen-connect-swift-server`](Sources/protoc-gen-connect-swift-server)
-and the generated examples checked into the integration tests.
+parameter per RPC method and a `register(with:&router)` helper. Unary and
+server-streaming closures use the metadata-aware signatures
+(`ServerRequest`/`ServerResponse`, trailing `Metadata`), so handlers can read
+request headers — auth tokens, locales — and return trailing metadata.
+
+Options (matching protoc-gen-swift / protoc-gen-grpc-swift-2 conventions):
+
+| Option | Meaning |
+|---|---|
+| `Visibility=Internal\|Public\|Package` | Access level of generated declarations (default `Public`) |
+| `ProtoPathModuleMappings=<path>` | Module-mappings file; foreign-module types are qualified and their modules imported |
+| `ExtraModuleImports=<Module>` | Additional module to import in generated files; repeatable |
+
+The generator lives in the [`ConnectServerGenerator`](Sources/ConnectServerGenerator)
+library target (unit-tested in `Tests/ConnectServerGeneratorTests`); the
+executable is a thin wrapper.
 
 ## Examples
 

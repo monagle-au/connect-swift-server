@@ -37,6 +37,15 @@ public struct ConnectServer: Sendable {
     // MARK: - Lifecycle
 
     /// Starts the server and runs until cancelled or shutdown is requested.
+    ///
+    /// Runs the Hummingbird `Application` directly as a
+    /// `ServiceLifecycle.Service` — deliberately NOT `runService()`, whose
+    /// convenience `ServiceGroup` installs its own `SIGTERM`/`SIGINT`
+    /// handlers. A library must not capture process signals: when embedded
+    /// under an application-owned `ServiceGroup`, that inner registration
+    /// steals the signal, drains only the HTTP listener, and leaves the rest
+    /// of the application running. Signal handling belongs to the caller;
+    /// this method terminates on task cancellation or graceful shutdown.
     public func serve() async throws {
         let serverBuilder: HTTPServerBuilder = try transportSecurity.makeServerBuilder()
         let configuration = ApplicationConfiguration(address: address)
@@ -51,7 +60,7 @@ public struct ConnectServer: Sendable {
         // ServiceGroupError if one of its internal services (e.g. DateCache)
         // exits before the group's cancel signal propagates — normalize both.
         do {
-            try await app.runService()
+            try await app.run()
         } catch {
             if Task.isCancelled { throw CancellationError() }
             throw error
