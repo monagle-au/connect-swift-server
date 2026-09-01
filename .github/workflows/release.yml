@@ -1,0 +1,178 @@
+name: Release
+
+# Fires when a version tag is pushed. Re-runs the full test suite on
+# macOS and Linux (plus the protoc plugin smoke test) as a release gate,
+# then creates a GitHub Release with the matching CHANGELOG.md section
+# as the body.
+#
+# Tag format: MAJOR.MINOR.PATCH, unprefixed (or pre-release suffixes
+# like 1.0.0-beta.1).
+
+on:
+  push:
+    tags:
+      - "[0-9]*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test-macos:
+    name: Test (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # The image's default toolchain can lag; select the newest Xcode.
+      - name: Select latest Xcode
+        run: |
+          latest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$latest" ]; then
+            echo "::error::No Xcode_*.app found"
+            exit 1
+          fi
+          sudo xcode-select -s "$latest/Contents/Developer"
+          swift --version
+
+      - name: Test
+        run: swift test --parallel
+
+      - name: Build with ConfigurationSupport disabled
+        run: swift build --disable-default-traits
+
+  test-linux:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.3-noble
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      # TLS integration tests are macOS-only (URLSession delegate).
+      - name: Test (excluding TLSIntegrationTests)
+        run: swift test --parallel --skip TLSIntegrationTests
+
+      - name: Build with ConfigurationSupport disabled
+        run: swift build --disable-default-traits
+
+  plugin-smoke:
+    name: protoc plugin smoke test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest Xcode
+        run: |
+          latest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          sudo xcode-select -s "$latest/Contents/Developer"
+          swift --version
+
+      - name: Install buf
+        run: brew install bufbuild/buf/buf
+
+      - name: Build plugin
+        run: swift build --product protoc-gen-connect-swift-server
+
+      - name: Generate from a sample .proto and check the result
+        run: |
+          mkdir -p /tmp/plugin-smoke && cd /tmp/plugin-smoke
+          cat > greeter.proto <<'EOF'
+          syntax = "proto3";
+          package smoke;
+          service Greeter {
+            rpc SayHello(HelloRequest) returns (HelloReply);
+            rpc StreamHellos(HelloRequest) returns (stream HelloReply);
+          }
+          message HelloRequest { string name = 1; }
+          message HelloReply { string message = 1; }
+          EOF
+          cat > buf.yaml <<'EOF'
+          version: v2
+          EOF
+          cat > buf.gen.yaml <<EOF
+          version: v2
+          plugins:
+            - local: ${{ github.workspace }}/.build/debug/protoc-gen-connect-swift-server
+              out: gen
+          EOF
+          buf generate
+          test -f gen/greeter.connect.swift
+          grep -q "Smoke_GreeterConnectService" gen/greeter.connect.swift
+          grep -q "registerUnary" gen/greeter.connect.swift
+          grep -q "registerServerStreaming" gen/greeter.connect.swift
+
+  release:
+    name: Create GitHub Release
+    needs: [test-macos, test-linux, plugin-smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the full history so we can read CHANGELOG.md from the
+          # tagged commit.
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Extract CHANGELOG section
+        id: notes
+        run: |
+          # Pull the section from the first "## [TAG]" line up to (but
+          # not including) the next "## [" line. Falls back to a stub if
+          # the section is missing so the release still gets created.
+          if [ -f CHANGELOG.md ]; then
+            awk -v v="${{ steps.tag.outputs.tag }}" '
+              $0 ~ "^## \\[" v "\\]" { found=1; print; next }
+              found && /^## \[/        { exit }
+              found                    { print }
+            ' CHANGELOG.md > release-notes.md
+          fi
+          if [ ! -s release-notes.md ]; then
+            echo "Release ${{ steps.tag.outputs.tag }}" > release-notes.md
+            echo "" >> release-notes.md
+            echo "_No matching CHANGELOG.md section found for ${{ steps.tag.outputs.tag }}._" >> release-notes.md
+          fi
+          echo "--- release notes ---"
+          cat release-notes.md
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          # Treat any tag containing a hyphen as a pre-release (rc, beta,
+          # alpha, …). Stable releases get marked latest.
+          PRERELEASE=false
+          if [[ "$TAG" == *-* ]]; then
+            PRERELEASE=true
+          fi
+
+          # Idempotent: if the release already exists (e.g. a tag was
+          # moved/re-pushed), update it in place instead of failing on the
+          # duplicate-create 422.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — updating notes."
+            gh release edit "$TAG" \
+                --title "$TAG" \
+                --notes-file release-notes.md \
+                --prerelease="$PRERELEASE"
+            if [ "$PRERELEASE" = false ]; then
+              gh release edit "$TAG" --latest
+            fi
+          else
+            CREATE_FLAG="--latest"
+            [ "$PRERELEASE" = true ] && CREATE_FLAG="--prerelease"
+            gh release create "$TAG" \
+                --title "$TAG" \
+                --notes-file release-notes.md \
+                $CREATE_FLAG
+          fi
